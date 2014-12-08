@@ -216,30 +216,31 @@ int get_chain_length(uint16_t startCluster, uint8_t *image_buf, struct bpb33* bp
 
 // fixes the situation where a FAT chain is shorter than the expected filesize
 void dir_entry_fixer(struct direntry *dirent, int chainLength) {
-    uint32_t size;
-    // size = math to get correct size from the chain length?? 
-    putulong(dirent->deFileSize)
+    uint32_t size = chainLength * 512;
+    // size = math to get correct size from the chain length??
+    putulong(dirent->deFileSize, size);
 }
 
 // fixes the situation where a FAT chain is longer than the correct file size
 void fat_chain_fixer(uint16_t startCluster, uint8_t *image_buf, struct bpb33* bpb, uint32_t expectedChainLength) {
     int currentNum = 1;
+    printf("startCluster: %d\n", startCluster);
+    uint16_t prevCluster = startCluster;
     uint16_t nextCluster = get_fat_entry(startCluster, image_buf, bpb);
-
+    //currentNum++; // SAM ADDED THIS
+    
     // cycle through the chain until the stopping point
     while (currentNum < expectedChainLength) {
+        prevCluster = nextCluster;
         nextCluster = get_fat_entry(nextCluster, image_buf, bpb);
         printf("nextCluster: %d\n", nextCluster);
         currentNum++;
     }
 
-    // set the new last cluster to EOF
-    printf("pre-fix nextCluster: %d\n", nextCluster);
-    set_fat_entry(nextCluster, (FAT12_MASK & CLUST_EOFS), image_buf, bpb);
-    printf("post-fix nextCluster: %d\n", nextCluster);
-
+    
     // free any clusters past the correct size
-    while (!is_end_of_file(nextCluster)) {
+    //nextCluster = get_fat_entry(nextCluster, image_buf, bpb);
+    while (!is_end_of_file(get_fat_entry(nextCluster, image_buf, bpb))) {
         uint16_t toFree = nextCluster;
         nextCluster = get_fat_entry(nextCluster, image_buf, bpb);
         printf("freed nextCluster: %d\n", nextCluster);
@@ -249,6 +250,13 @@ void fat_chain_fixer(uint16_t startCluster, uint8_t *image_buf, struct bpb33* bp
     // frees the old EOF
     set_fat_entry(nextCluster, CLUST_FREE, image_buf, bpb);
     printf("last nextCluster: %d\n", nextCluster);
+    
+    // set the new last cluster to EOF
+    //nextCluster = get_fat_entry(prevCluster, image_buf, bpb);
+    printf("pre-fix nextCluster: %d\n", prevCluster);
+    set_fat_entry(prevCluster, (FAT12_MASK & CLUST_EOFS), image_buf, bpb);
+    prevCluster = get_fat_entry(prevCluster, image_buf, bpb);
+    printf("post-fix nextCluster: %d\n", prevCluster);
 
 }
 
