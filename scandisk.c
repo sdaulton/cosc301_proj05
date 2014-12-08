@@ -214,6 +214,37 @@ int get_chain_length(uint16_t startCluster, uint8_t *image_buf, struct bpb33* bp
     return numClusters;
 }
 
+// fixes the situation where a FAT chain is longer than the correct file size
+void fat_chain_fixer(uint16_t startCluster, uint8_t *image_buf, struct bpb33* bpb, uint32_t expectedChainLength) {
+    int currentNum = 1;
+    uint16_t nextCluster = get_fat_entry(startCluster, image_buf, bpb);
+
+    // cycle through the chain until the stopping point
+    while (currentNum < expectedChainLength) {
+        nextCluster = get_fat_entry(nextCluster, image_buf, bpb);
+        printf("nextCluster: %d\n", nextCluster);
+        currentNum++;
+    }
+
+    // set the new last cluster to EOF
+    printf("pre-fix nextCluster: %d\n", nextCluster);
+    set_fat_entry(nextCluster, (FAT12_MASK & CLUST_EOFS), image_buf, bpb);
+    printf("post-fix nextCluster: %d\n", nextCluster);
+
+    // free any clusters past the correct size
+    while (!is_end_of_file(nextCluster)) {
+        uint16_t toFree = nextCluster;
+        nextCluster = get_fat_entry(nextCluster, image_buf, bpb);
+        printf("freed nextCluster: %d\n", nextCluster);
+        set_fat_entry(toFree, CLUST_FREE, image_buf, bpb);
+    }
+
+    // frees the old EOF
+    set_fat_entry(nextCluster, CLUST_FREE, image_buf, bpb);
+    printf("last nextCluster: %d\n", nextCluster);
+
+}
+
 void follow_dir(uint16_t cluster, int indent,
                 uint8_t *image_buf, struct bpb33* bpb)
 {
@@ -242,8 +273,10 @@ void follow_dir(uint16_t cluster, int indent,
                 expectedChainLength = (size % 512) ? (size / 512 + 1) : (size / 512);
                 if (chainLength != expectedChainLength) {
                     printf("INCONSISTENCY: expected chain length (%u clusters) does not match length of cluster chain (%d clusters)\n", expectedChainLength, chainLength);
+                    fat_chain_fixer(startCluster, image_buf, bpb, expectedChainLength);
+                    printf("Now it's fixed!\n");
                 } else {
-                    printf("expected chain length (%u clusters) matches length of cluster chain (%d clusters)\n", expectedChainLength, chainLength);
+                    //printf("expected chain length (%u clusters) matches length of cluster chain (%d clusters)\n", expectedChainLength, chainLength);
                 }
             }
             if (followclust) {
