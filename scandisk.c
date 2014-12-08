@@ -13,7 +13,7 @@
 #include "direntry.h"
 #include "fat.h"
 #include "dos.h"
-#include "refc.h"
+#include "refc.c"
 
 void usage(char *progname) {
     fprintf(stderr, "usage: %s <imagename>\n", progname);
@@ -205,7 +205,7 @@ uint16_t is_file(struct direntry *dirent, int indent)
 }
 
 // Takes the start cluster number as a parameter and returns the length of the cluster chain (i.e. number of clusters in file)
-int get_chain_length(uint16_t startCluster, uint8_t *image_buf, struct bpb33* bpb) {
+int get_chain_length(uint16_t startCluster, uint8_t *image_buf, struct bpb33* bpb, struct node *references[]) {
     int numClusters = 1;
     uint16_t nextCluster = get_fat_entry(startCluster, image_buf, bpb);
     while (!is_end_of_file(nextCluster)) {
@@ -260,7 +260,7 @@ void fat_chain_fixer(uint16_t startCluster, uint8_t *image_buf, struct bpb33* bp
 }
 
 void follow_dir(uint16_t cluster, int indent,
-                uint8_t *image_buf, struct bpb33* bpb)
+                uint8_t *image_buf, struct bpb33* bpb, struct node *references[])
 {
     uint32_t size = 0;
     uint16_t startCluster = 0;
@@ -276,13 +276,14 @@ void follow_dir(uint16_t cluster, int indent,
         {
             // for each file in this directory
             uint16_t followclust = print_dirent(dirent, indent);
+            printf("3 Here\n");
             if (is_file(dirent, indent)) {
                 // dirent is for a regular file
-                
+                printf("4 Here\n");
                 size = getulong(dirent->deFileSize);
                 startCluster = getushort(dirent->deStartCluster);
                 // check that length of cluster chain == size
-                chainLength = get_chain_length(startCluster, image_buf, bpb);
+                chainLength = get_chain_length(startCluster, image_buf, bpb, references);
                 // ceiling division
                 expectedChainLength = (size % 512) ? (size / 512 + 1) : (size / 512);
                 if (chainLength != expectedChainLength) {
@@ -298,10 +299,12 @@ void follow_dir(uint16_t cluster, int indent,
                 }
             }
             if (followclust) {
+                printf("5 Here\n");
                 // dirent is for a directory
-                follow_dir(followclust, indent+1, image_buf, bpb);
+                follow_dir(followclust, indent+1, image_buf, bpb, references);
             }
             dirent++;
+            printf("6 Here\n");
         }
         
         cluster = get_fat_entry(cluster, image_buf, bpb);
@@ -309,7 +312,7 @@ void follow_dir(uint16_t cluster, int indent,
 }
 
 
-void traverse_root(uint8_t *image_buf, struct bpb33* bpb)
+void traverse_root(uint8_t *image_buf, struct bpb33* bpb, struct node *references[])
 {
     uint16_t cluster = 0;
     
@@ -318,9 +321,12 @@ void traverse_root(uint8_t *image_buf, struct bpb33* bpb)
     int i = 0;
     for ( ; i < bpb->bpbRootDirEnts; i++)
     {
+        printf("1 Here\n");
         uint16_t followclust = print_dirent(dirent, 0);
         if (is_valid_cluster(followclust, bpb)) {
-            follow_dir(followclust, 1, image_buf, bpb);
+            printf("2 Here\n");
+            
+            follow_dir(followclust, 1, image_buf, bpb, references);
         }
         dirent++;
     }
@@ -337,7 +343,13 @@ int main(int argc, char** argv) {
 
     image_buf = mmap_file(argv[1], &fd);
     bpb = check_bootsector(image_buf);
-    traverse_root(image_buf, bpb);
+    int numDataClusters = bpb->bpbSectors - 1 - 9 - 9 - 14;
+    struct node *references[numDataClusters] ;
+    for (int i = 0; i< numDataClusters; i ++) {
+        references[i] = malloc(sizeof(struct node));
+        node_init(references[i]);
+    }
+    traverse_root(image_buf, bpb, references);
     // your code should start here...
 
 
@@ -345,5 +357,6 @@ int main(int argc, char** argv) {
 
 
     unmmap_file(image_buf, &fd);
+    // remember to FREE references
     return 0;
 }
