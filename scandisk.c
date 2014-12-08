@@ -13,6 +13,7 @@
 #include "direntry.h"
 #include "fat.h"
 #include "dos.h"
+#include "refc.h"
 
 void usage(char *progname) {
     fprintf(stderr, "usage: %s <imagename>\n", progname);
@@ -217,7 +218,6 @@ int get_chain_length(uint16_t startCluster, uint8_t *image_buf, struct bpb33* bp
 // fixes the situation where a FAT chain is shorter than the expected filesize
 void dir_entry_fixer(struct direntry *dirent, int chainLength) {
     uint32_t size = chainLength * 512;
-    // size = math to get correct size from the chain length??
     putulong(dirent->deFileSize, size);
 }
 
@@ -252,7 +252,6 @@ void fat_chain_fixer(uint16_t startCluster, uint8_t *image_buf, struct bpb33* bp
     printf("last nextCluster: %d\n", nextCluster);
     
     // set the new last cluster to EOF
-    //nextCluster = get_fat_entry(prevCluster, image_buf, bpb);
     printf("pre-fix nextCluster: %d\n", prevCluster);
     set_fat_entry(prevCluster, (FAT12_MASK & CLUST_EOFS), image_buf, bpb);
     prevCluster = get_fat_entry(prevCluster, image_buf, bpb);
@@ -289,14 +288,11 @@ void follow_dir(uint16_t cluster, int indent,
                 if (chainLength != expectedChainLength) {
                     printf("INCONSISTENCY: expected chain length (%u clusters) does not match length of cluster chain (%d clusters)\n", expectedChainLength, chainLength);
                     if (chainLength > expectedChainLength) {
-                        printf("Too long!\n");
                         fat_chain_fixer(startCluster, image_buf, bpb, expectedChainLength);
                     }
                     else {
-                        printf("Too short!\n");
                         dir_entry_fixer(dirent, chainLength);
                     }
-                    printf("Now it's fixed!\n");
                 } else {
                     //printf("expected chain length (%u clusters) matches length of cluster chain (%d clusters)\n", expectedChainLength, chainLength);
                 }
