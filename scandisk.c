@@ -321,14 +321,23 @@ int get_cluster_type(uint16_t clusterNum, uint8_t *image_buf, struct bpb33* bpb)
 // Takes the start cluster number as a parameter and returns the length of the cluster chain (i.e. number of clusters in file)
 int get_chain_length(uint16_t startCluster, uint8_t *image_buf, struct bpb33* bpb, struct node *references[]) {
     int numClusters = 1;
-    uint16_t nextCluster = get_fat_entry(startCluster, image_buf, bpb);
+    uint16_t eofCluster = get_fat_entry(startCluster, image_buf, bpb);
+    if (is_end_of_file(eofCluster)) {
+        //startCluster contains EOF
+        return numClusters;
+    }
+    uint16_t nextCluster = get_fat_entry(eofCluster, image_buf, bpb);
+
     while (!is_end_of_file(nextCluster)) {
-        references[nextCluster]->inDir = 1;
-        references[nextCluster]->type = get_cluster_type(nextCluster, image_buf, bpb);
+        references[eofCluster]->inDir = 1;
+        references[eofCluster]->type = get_cluster_type(eofCluster, image_buf, bpb);
+        eofCluster = nextCluster;
         nextCluster = get_fat_entry(nextCluster, image_buf, bpb);
         numClusters++;
+        
     }
-    references[startCluster + numClusters]->inDir = 1; // Include the EOF as being in the directory.
+    references[eofCluster]->inDir = 1; // Include the EOF as being in the directory.
+    references[eofCluster]->type = get_cluster_type(eofCluster, image_buf, bpb);
     return numClusters;
 }
 
@@ -349,10 +358,11 @@ void orphan_fixer(uint8_t *image_buf, struct bpb33* bpb, struct node *references
     
     for (int i = 2; i < numDataClusters; i++) {
         if (nextCluster != 0) {
-            //printf("nextCluster: %d, inDir:%d, type: %d\n", nextCluster, references[i]->inDir, references[i]->type);
+            printf("nextCluster: %d, inDir:%d, type: %d\n", nextCluster, references[i]->inDir, references[i]->type);
         }
         if (nextCluster != (FAT12_MASK&CLUST_FREE) && references[i]->inDir == 0) {
             printf("Orphan #%d found! Cluster #%d.\n", orphanNum, i);
+            printf("Orphan type = %d\n", get_cluster_type(nextCluster, image_buf, bpb));
             printf("nextCluster: %d\n", nextCluster);
             sprintf(num, "%d", orphanNum); // Converts to string so we can concat.
             strcpy(name, "found");

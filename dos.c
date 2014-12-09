@@ -82,6 +82,7 @@ uint8_t *mmap_file(char *filename, int *fd)
 
 void unmmap_file(uint8_t *image, int *fd)
 {
+    msync(image, imagesize, MS_SYNC);
     munmap(image, imagesize);
     close(*fd);
 }
