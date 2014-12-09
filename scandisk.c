@@ -336,7 +336,6 @@ void orphan_fixer(uint8_t *image_buf, struct bpb33* bpb, struct node *references
     //int is_orphan = 0; // 0 = not orphan, 1 = orphan.
     printf("For ref, valid clusts can go from 2-%d\n", (CLUST_LAST&FAT12_MASK));
     int numClusters = 1;
-    //int curCluster = 2;
     char name[64];
     char num[32];
     int orphanNum = 1;
@@ -344,27 +343,27 @@ void orphan_fixer(uint8_t *image_buf, struct bpb33* bpb, struct node *references
     struct direntry *dirent = (struct direntry*)cluster_to_addr(2, image_buf, bpb);
     nextCluster = get_fat_entry(2, image_buf, bpb);
     
-    for (int i = 3; i < 4079; i++) {
-        //printf("Next cluster: %d\n", nextCluster);
-        if ((nextCluster >= 2 && nextCluster <= 4079) && (references[nextCluster]->inDir == 0)) {
-            printf("Orphan #%d found! Cluster #%d.\n", orphanNum, nextCluster);
+    for (int i = 2; i < numDataClusters; i++) {
+        if (nextCluster != (FAT12_MASK&CLUST_FREE) && references[i]->inDir == 0) {
+            printf("Orphan #%d found! Cluster #%d.\n", orphanNum, i);
             sprintf(num, "%d", orphanNum); // Converts to string so we can concat.
             strcpy(name, "found");
             strcat(name, num);
             strcat(name, ".dat");
             while (!is_end_of_file(nextCluster)) {
-                nextCluster = get_fat_entry(nextCluster, image_buf, bpb);
+                nextCluster = get_fat_entry(i, image_buf, bpb);
                 references[i]-> inDir = 1;
-                //printf("Part of orphan: %d\n", nextCluster);
+                printf("Part of orphan: %d\n", i);
                 numClusters++;
+                i++;
             }
-            create_dirent(dirent, name, nextCluster, numClusters * 512, image_buf, bpb);
+            create_dirent(dirent, name, i, numClusters * 512, image_buf, bpb);
             numClusters = 0;
             orphanNum++;
             references[i]->inDir = 1;
             printf("Orphan fixed!\n");
         }
-        nextCluster = get_fat_entry(nextCluster, image_buf, bpb);
+        nextCluster = get_fat_entry(i, image_buf, bpb);
     }
 }
 
@@ -499,8 +498,7 @@ int main(int argc, char** argv) {
 
     image_buf = mmap_file(argv[1], &fd);
     bpb = check_bootsector(image_buf);
-    //int numDataClusters = bpb->bpbSectors - 1 - 9 - 9 - 14;
-    int numDataClusters = 4079;
+    int numDataClusters = bpb->bpbSectors - 1 - 9 - 9 - 14;
     // initialize data structure to store information about each cluster
     struct node *references[numDataClusters + 2]; // only + 2 to create idempotent mapping from cluster number to index
     for (int i = 2; i < numDataClusters + 2; i ++) {
