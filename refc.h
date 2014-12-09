@@ -4,8 +4,7 @@
 struct node {
 	int inFat;
 	int inDir;
-	int isValid;
-	int isFull;
+    int type; // 0 -> empty; 1-> normal part of cluster chain; 2-> eof; 3-> bad; 4 -> reserved; -1 -> not set
 };
 
 void node_init(struct node *n);
