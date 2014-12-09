@@ -20,6 +20,100 @@ void usage(char *progname) {
     exit(1);
 }
 
+/* write the values into a directory entry -- taken from dos_cp.c */
+void write_dirent(struct direntry *dirent, char *filename, 
+          uint16_t start_cluster, uint32_t size)
+{
+    char *p, *p2;
+    char *uppername;
+    int len, i;
+
+    /* clean out anything old that used to be here */
+    memset(dirent, 0, sizeof(struct direntry));
+
+    /* extract just the filename part */
+    uppername = strdup(filename);
+    p2 = uppername;
+    for (i = 0; i < strlen(filename); i++) 
+    {
+    if (p2[i] == '/' || p2[i] == '\\') 
+    {
+        uppername = p2+i+1;
+    }
+    }
+
+    /* convert filename to upper case */
+    for (i = 0; i < strlen(uppername); i++) 
+    {
+    uppername[i] = toupper(uppername[i]);
+    }
+
+    /* set the file name and extension */
+    memset(dirent->deName, ' ', 8);
+    p = strchr(uppername, '.');
+    memcpy(dirent->deExtension, "___", 3);
+    if (p == NULL) 
+    {
+    fprintf(stderr, "No filename extension given - defaulting to .___\n");
+    }
+    else 
+    {
+    *p = '\0';
+    p++;
+    len = strlen(p);
+    if (len > 3) len = 3;
+    memcpy(dirent->deExtension, p, len);
+    }
+
+    if (strlen(uppername)>8) 
+    {
+    uppername[8]='\0';
+    }
+    memcpy(dirent->deName, uppername, strlen(uppername));
+    free(p2);
+
+    /* set the attributes and file size */
+    dirent->deAttributes = ATTR_NORMAL;
+    putushort(dirent->deStartCluster, start_cluster);
+    putulong(dirent->deFileSize, size);
+
+    /* could also set time and date here if we really
+       cared... */
+}
+
+
+/* create_dirent finds a free slot in the directory, and write the
+   directory entry -- taken from dos_cp.c*/
+
+void create_dirent(struct direntry *dirent, char *filename, 
+           uint16_t start_cluster, uint32_t size,
+           uint8_t *image_buf, struct bpb33* bpb)
+{
+    while (1) 
+    {
+    if (dirent->deName[0] == SLOT_EMPTY) 
+    {
+        /* we found an empty slot at the end of the directory */
+        write_dirent(dirent, filename, start_cluster, size);
+        dirent++;
+
+        /* make sure the next dirent is set to be empty, just in
+           case it wasn't before */
+        memset((uint8_t*)dirent, 0, sizeof(struct direntry));
+        dirent->deName[0] = SLOT_EMPTY;
+        return;
+    }
+
+    if (dirent->deName[0] == SLOT_DELETED) 
+    {
+        /* we found a deleted entry - we can just overwrite it */
+        write_dirent(dirent, filename, start_cluster, size);
+        return;
+    }
+    dirent++;
+    }
+}
+
 
 
 void print_indent(int indent)
@@ -207,7 +301,7 @@ uint16_t is_file(struct direntry *dirent, int indent)
 // returns an integer representing the cluster type, used in the cluster references data strucutre
 int get_cluster_type(uint16_t clusterNum, uint8_t *image_buf, struct bpb33* bpb) {
     uint16_t fatEntry = get_fat_entry(clusterNum, image_buf, bpb);
-    if (is_valid_cluster(fatEntry, bpb)) {
+    if (fatEntry >= (FAT12_MASK & CLUST_FIRST) && fatEntry <= (FAT12_MASK & CLUST_LAST)) {
         return 1;
     } else if (is_end_of_file(fatEntry)) {
         return 2;
@@ -235,6 +329,43 @@ int get_chain_length(uint16_t startCluster, uint8_t *image_buf, struct bpb33* bp
         numClusters++;
     }
     return numClusters;
+}
+
+void orphan_fixer(uint8_t *image_buf, struct bpb33* bpb, struct node *references[], 
+                                                                int numDataClusters) {
+    //int is_orphan = 0; // 0 = not orphan, 1 = orphan.
+    printf("For ref, valid clusts can go from 2-%d\n", (CLUST_LAST&FAT12_MASK));
+    int numClusters = 1;
+    //int curCluster = 2;
+    char name[64];
+    char num[32];
+    int orphanNum = 1;
+    uint16_t nextCluster;
+    struct direntry *dirent = (struct direntry*)cluster_to_addr(2, image_buf, bpb);
+    nextCluster = get_fat_entry(2, image_buf, bpb);
+    
+    for (int i = 3; i < 4079; i++) {
+        //printf("Next cluster: %d\n", nextCluster);
+        if ((nextCluster >= 2 && nextCluster <= 4079) && (references[nextCluster]->inDir == 0)) {
+            printf("Orphan #%d found! Cluster #%d.\n", orphanNum, nextCluster);
+            sprintf(num, "%d", orphanNum); // Converts to string so we can concat.
+            strcpy(name, "found");
+            strcat(name, num);
+            strcat(name, ".dat");
+            while (!is_end_of_file(nextCluster)) {
+                nextCluster = get_fat_entry(nextCluster, image_buf, bpb);
+                references[i]-> inDir = 1;
+                //printf("Part of orphan: %d\n", nextCluster);
+                numClusters++;
+            }
+            create_dirent(dirent, name, nextCluster, numClusters * 512, image_buf, bpb);
+            numClusters = 0;
+            orphanNum++;
+            references[i]->inDir = 1;
+            printf("Orphan fixed!\n");
+        }
+        nextCluster = get_fat_entry(nextCluster, image_buf, bpb);
+    }
 }
 
 // fixes the situation where a FAT chain is shorter than the expected filesize
@@ -305,10 +436,8 @@ void follow_dir(uint16_t cluster, int indent,
         {
             // for each file in this directory
             uint16_t followclust = print_dirent(dirent, indent);
-            printf("3 Here\n");
             if (is_file(dirent, indent)) {
                 // dirent is for a regular file
-                printf("4 Here\n");
                 size = getulong(dirent->deFileSize);
                 startCluster = getushort(dirent->deStartCluster);
                 // update cluster references
@@ -331,12 +460,10 @@ void follow_dir(uint16_t cluster, int indent,
                 }
             }
             if (followclust) {
-                printf("5 Here\n");
                 // dirent is for a directory
                 follow_dir(followclust, indent+1, image_buf, bpb, references);
             }
             dirent++;
-            printf("6 Here\n");
         }
         
         cluster = get_fat_entry(cluster, image_buf, bpb);
@@ -353,11 +480,8 @@ void traverse_root(uint8_t *image_buf, struct bpb33* bpb, struct node *reference
     int i = 0;
     for ( ; i < bpb->bpbRootDirEnts; i++)
     {
-        printf("1 Here\n");
         uint16_t followclust = print_dirent(dirent, 0);
-        if (is_valid_cluster(followclust, bpb)) {
-            printf("2 Here\n");
-            
+        if (is_valid_cluster(followclust, bpb)) {            
             follow_dir(followclust, 1, image_buf, bpb, references);
         }
         dirent++;
@@ -375,10 +499,11 @@ int main(int argc, char** argv) {
 
     image_buf = mmap_file(argv[1], &fd);
     bpb = check_bootsector(image_buf);
-    int numDataClusters = bpb->bpbSectors - 1 - 9 - 9 - 14;
+    //int numDataClusters = bpb->bpbSectors - 1 - 9 - 9 - 14;
+    int numDataClusters = 4079;
     // initialize data structure to store information about each cluster
     struct node *references[numDataClusters + 2]; // only + 2 to create idempotent mapping from cluster number to index
-    for (int i = 2; i < numDataClusters; i ++) {
+    for (int i = 2; i < numDataClusters + 2; i ++) {
         references[i] = malloc(sizeof(struct node));
         node_init(references[i]);
     }
@@ -391,12 +516,13 @@ int main(int argc, char** argv) {
     // but the cluster type is not set in the references data structure
     // create a new direntry in the root directory for that orphan block (and string connected orphans together if there is a cluster chain) in the FAT
     
+    orphan_fixer(image_buf, bpb, references, numDataClusters);
 
 
 
     unmmap_file(image_buf, &fd);
-    for (int i = 2; i < 40; i++) {
-        printf("Cluster Number: %d; inFat: %d; inDir: %d; type: %d\n", i, references[i]->inFat,references[i]->inDir, references[i]->type);
+    for (int i = 2; i < 200; i++) {
+        //printf("Cluster Number: %d; inFat: %d; inDir: %d; type: %d\n", i, references[i]->inFat,references[i]->inDir, references[i]->type);
         free(references[i]);
     }
     // remember to FREE references
