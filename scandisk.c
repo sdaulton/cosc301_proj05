@@ -321,23 +321,14 @@ int get_cluster_type(uint16_t clusterNum, uint8_t *image_buf, struct bpb33* bpb)
 // Takes the start cluster number as a parameter and returns the length of the cluster chain (i.e. number of clusters in file)
 int get_chain_length(uint16_t startCluster, uint8_t *image_buf, struct bpb33* bpb, struct node *references[]) {
     int numClusters = 1;
-    uint16_t eofCluster = get_fat_entry(startCluster, image_buf, bpb);
-    if (is_end_of_file(eofCluster)) {
-        //startCluster contains EOF
-        return numClusters;
-    }
-    uint16_t nextCluster = get_fat_entry(eofCluster, image_buf, bpb);
-
+    uint16_t nextCluster = get_fat_entry(startCluster, image_buf, bpb);
     while (!is_end_of_file(nextCluster)) {
-        references[eofCluster]->inDir = 1;
-        references[eofCluster]->type = get_cluster_type(eofCluster, image_buf, bpb);
-        eofCluster = nextCluster;
+        references[nextCluster]->inDir = 1;
+        references[nextCluster]->type = get_cluster_type(nextCluster, image_buf, bpb);
         nextCluster = get_fat_entry(nextCluster, image_buf, bpb);
         numClusters++;
         
     }
-    references[eofCluster]->inDir = 1; // Include the EOF as being in the directory.
-    references[eofCluster]->type = get_cluster_type(eofCluster, image_buf, bpb);
     return numClusters;
 }
 
@@ -352,30 +343,31 @@ void orphan_fixer(uint8_t *image_buf, struct bpb33* bpb, struct node *references
     int orphanNum = 1;
     uint16_t nextCluster;
     struct direntry *dirent = (struct direntry*)cluster_to_addr(2, image_buf, bpb);
-    nextCluster = get_fat_entry(2, image_buf, bpb);
-    int clustType = get_cluster_type(2, image_buf, bpb);
+    int clustType = 0;
 
     
     for (int i = 2; i < numDataClusters; i++) {
+        nextCluster = get_fat_entry(i, image_buf, bpb);
+        clustType = get_cluster_type(i, image_buf, bpb);
         if (nextCluster != 0) {
-            printf("nextCluster: %d, inDir:%d, type: %d\n", nextCluster, references[i]->inDir, references[i]->type);
+            //printf("nextCluster: %d, inDir:%d, type: %d\n", nextCluster, references[i]->inDir, references[i]->type);
         }
         if (nextCluster != (FAT12_MASK&CLUST_FREE) && references[i]->inDir == 0) {
             printf("Orphan #%d found! Cluster #%d.\n", orphanNum, i);
-            printf("Orphan type = %d\n", get_cluster_type(nextCluster, image_buf, bpb));
+            printf("Orphan type = %d\n", references[i]->type);
             printf("nextCluster: %d\n", nextCluster);
             sprintf(num, "%d", orphanNum); // Converts to string so we can concat.
             strcpy(name, "found");
             strcat(name, num);
             strcat(name, ".dat");
-            while (!is_end_of_file(nextCluster)) {
+            /*while (!is_end_of_file(nextCluster)) {
                 printf("Longer than two.\n");
                 nextCluster = get_fat_entry(i, image_buf, bpb);
                 references[i]-> inDir = 1;
                 printf("Part of orphan: %d\n", i);
                 numClusters++;
                 i++;
-            }
+            }*/
             create_dirent(dirent, name, i, numClusters * 512, image_buf, bpb);
             printf("Name: %s, i: %d, size: %d\n", name, i, numClusters*512);
             numClusters = 1;
@@ -384,8 +376,6 @@ void orphan_fixer(uint8_t *image_buf, struct bpb33* bpb, struct node *references
             references[i]->type = clustType;
             printf("Orphan fixed!\n");
         }
-        nextCluster = get_fat_entry(i, image_buf, bpb);
-        clustType = get_cluster_type(2, image_buf, bpb);
     }
 }
 
@@ -530,6 +520,9 @@ int main(int argc, char** argv) {
     // traverse directory entries to gather metadata
     traverse_root(image_buf, bpb, references);
     
+    for (int i = 2; i < 35; i++) {
+        printf("Cluster Number: %d; inFat: %d; inDir: %d; type: %d; actual fat entry: %d\n", i, references[i]->inFat,references[i]->inDir, references[i]->type, get_fat_entry(i, image_buf, bpb));
+    }
     //NEXT STEP
     // now traverse FAT to look for orphan blocks
     // for each fat entry that is not empty (CHECK THIS STRAIGHT OUT OF THE FAT)
@@ -541,7 +534,7 @@ int main(int argc, char** argv) {
 
 
     unmmap_file(image_buf, &fd);
-    for (int i = 2; i < 200; i++) {
+    for (int i = 2; i < 35; i++) {
         //printf("Cluster Number: %d; inFat: %d; inDir: %d; type: %d\n", i, references[i]->inFat,references[i]->inDir, references[i]->type);
         free(references[i]);
     }
