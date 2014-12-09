@@ -351,6 +351,7 @@ void orphan_fixer(uint8_t *image_buf, struct bpb33* bpb, struct node *references
             strcat(name, num);
             strcat(name, ".dat");
             while (!is_end_of_file(nextCluster)) {
+                printf("Longer than two.\n");
                 nextCluster = get_fat_entry(i, image_buf, bpb);
                 references[i]-> inDir = 1;
                 printf("Part of orphan: %d\n", i);
@@ -358,7 +359,8 @@ void orphan_fixer(uint8_t *image_buf, struct bpb33* bpb, struct node *references
                 i++;
             }
             create_dirent(dirent, name, i, numClusters * 512, image_buf, bpb);
-            numClusters = 0;
+            printf("Name: %s, i: %d, size: %d\n", name, i, numClusters*512);
+            numClusters = 1;
             orphanNum++;
             references[i]->inDir = 1;
             printf("Orphan fixed!\n");
