@@ -70,7 +70,7 @@ uint8_t *mmap_file(char *filename, int *fd)
 
     /* Step 4: we memory map the file */
 
-    image_buf = mmap(NULL, imagesize, PROT_READ | PROT_WRITE, MAP_PRIVATE, *fd, 0);
+    image_buf = mmap(NULL, imagesize, PROT_READ | PROT_WRITE, MAP_SHARED, *fd, 0);
     if (image_buf == MAP_FAILED) 
     {
 	fprintf(stderr, "Failed to memory map: \n%s\n", strerror(errno));
