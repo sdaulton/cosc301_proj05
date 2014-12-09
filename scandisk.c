@@ -328,6 +328,7 @@ int get_chain_length(uint16_t startCluster, uint8_t *image_buf, struct bpb33* bp
         nextCluster = get_fat_entry(nextCluster, image_buf, bpb);
         numClusters++;
     }
+    references[startCluster + numClusters]->inDir = 1; // Include the EOF as being in the directory.
     return numClusters;
 }
 
@@ -335,6 +336,7 @@ void orphan_fixer(uint8_t *image_buf, struct bpb33* bpb, struct node *references
                                                                 int numDataClusters) {
     //int is_orphan = 0; // 0 = not orphan, 1 = orphan.
     printf("For ref, valid clusts can go from 2-%d\n", (CLUST_LAST&FAT12_MASK));
+    printf("EOF range is from %d-%d\n", (CLUST_EOFS&FAT12_MASK), (CLUST_EOFE&FAT12_MASK));
     int numClusters = 1;
     char name[64];
     char num[32];
@@ -342,10 +344,16 @@ void orphan_fixer(uint8_t *image_buf, struct bpb33* bpb, struct node *references
     uint16_t nextCluster;
     struct direntry *dirent = (struct direntry*)cluster_to_addr(2, image_buf, bpb);
     nextCluster = get_fat_entry(2, image_buf, bpb);
+    int clustType = get_cluster_type(2, image_buf, bpb);
+
     
     for (int i = 2; i < numDataClusters; i++) {
+        if (nextCluster != 0) {
+            //printf("nextCluster: %d, inDir:%d, type: %d\n", nextCluster, references[i]->inDir, references[i]->type);
+        }
         if (nextCluster != (FAT12_MASK&CLUST_FREE) && references[i]->inDir == 0) {
             printf("Orphan #%d found! Cluster #%d.\n", orphanNum, i);
+            printf("nextCluster: %d\n", nextCluster);
             sprintf(num, "%d", orphanNum); // Converts to string so we can concat.
             strcpy(name, "found");
             strcat(name, num);
@@ -363,9 +371,11 @@ void orphan_fixer(uint8_t *image_buf, struct bpb33* bpb, struct node *references
             numClusters = 1;
             orphanNum++;
             references[i]->inDir = 1;
+            references[i]->type = clustType;
             printf("Orphan fixed!\n");
         }
         nextCluster = get_fat_entry(i, image_buf, bpb);
+        clustType = get_cluster_type(2, image_buf, bpb);
     }
 }
 
@@ -378,7 +388,6 @@ void dir_entry_fixer(struct direntry *dirent, int chainLength) {
 // fixes the situation where a FAT chain is longer than the correct file size
 void fat_chain_fixer(uint16_t startCluster, uint8_t *image_buf, struct bpb33* bpb, uint32_t expectedChainLength, struct node *references[]) {
     int currentNum = 1;
-    printf("startCluster: %d\n", startCluster);
     uint16_t prevCluster = startCluster;
     uint16_t nextCluster = get_fat_entry(startCluster, image_buf, bpb);
     //currentNum++; // SAM ADDED THIS
@@ -387,10 +396,8 @@ void fat_chain_fixer(uint16_t startCluster, uint8_t *image_buf, struct bpb33* bp
     while (currentNum < expectedChainLength) {
         prevCluster = nextCluster;
         nextCluster = get_fat_entry(nextCluster, image_buf, bpb);
-        printf("nextCluster: %d\n", nextCluster);
         currentNum++;
     }
-
     
     // free any clusters past the correct size
     //nextCluster = get_fat_entry(nextCluster, image_buf, bpb);
@@ -400,24 +407,25 @@ void fat_chain_fixer(uint16_t startCluster, uint8_t *image_buf, struct bpb33* bp
         references[nextCluster]->inDir = 0;
         references[nextCluster]->type = 0;
         nextCluster = get_fat_entry(nextCluster, image_buf, bpb);
-        printf("freed nextCluster: %d\n", nextCluster);
         set_fat_entry(toFree, CLUST_FREE, image_buf, bpb);
     }
 
     // frees the old EOF
+    //printf("nextCluster: %d\n", nextCluster);
     references[nextCluster]->inDir = 0;
     references[nextCluster]->type = 0;
     set_fat_entry(nextCluster, CLUST_FREE, image_buf, bpb);
-    printf("last nextCluster: %d\n", nextCluster);
+    //nextCluster = get_fat_entry(nextCluster, image_buf, bpb);
+    //printf("nextCluster: %d\n", nextCluster);
+
     
+    //printf("prevCluster: %d\n", prevCluster);
     // set the new last cluster to EOF
-    printf("pre-fix nextCluster: %d\n", prevCluster);
     set_fat_entry(prevCluster, (FAT12_MASK & CLUST_EOFS), image_buf, bpb);
     //update references
     references[prevCluster]->type = 2;
+    references[prevCluster]->inDir = 1;
     prevCluster = get_fat_entry(prevCluster, image_buf, bpb);
-    printf("post-fix nextCluster: %d\n", prevCluster);
-
 }
 
 void follow_dir(uint16_t cluster, int indent,
@@ -452,9 +460,11 @@ void follow_dir(uint16_t cluster, int indent,
                     printf("INCONSISTENCY: expected chain length (%u clusters) does not match length of cluster chain (%d clusters)\n", expectedChainLength, chainLength);
                     if (chainLength > expectedChainLength) {
                         fat_chain_fixer(startCluster, image_buf, bpb, expectedChainLength, references);
+                        printf("Inconsistency fixed.\n");
                     }
                     else {
                         dir_entry_fixer(dirent, chainLength);
+                        printf("Inconsistency fixed.\n");
                     }
                 } else {
                     //printf("expected chain length (%u clusters) matches length of cluster chain (%d clusters)\n", expectedChainLength, chainLength);
