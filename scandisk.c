@@ -168,6 +168,12 @@ uint16_t print_dirent(struct direntry *dirent, int indent)
             break;
     }
     
+    if (getushort(dirent->deStartCluster) == 4) {
+        printf("starting cluster num 4: %s\n", name);
+    }
+    if (getushort(dirent->deStartCluster) == 3) {
+        printf("starting cluster num 3: %s\n", name);
+    }
     /* remove the spaces from extensions */
     for (i = 3; i > 0; i--)
     {
@@ -223,7 +229,7 @@ uint16_t print_dirent(struct direntry *dirent, int indent)
     return followclust;
 }
 
-// returns 1 if it is a normal file, 0 if not
+// returns 1 if it is a normal file or directory, 0 if not
 uint16_t is_file(struct direntry *dirent, int indent)
 {
     uint16_t isNormalFile = 0;
@@ -284,6 +290,9 @@ uint16_t is_file(struct direntry *dirent, int indent)
     else if ((dirent->deAttributes & ATTR_DIRECTORY) != 0)
     {
         //do nothing
+        if ((dirent->deAttributes & ATTR_HIDDEN) != ATTR_HIDDEN) {
+            isNormalFile = 1;
+        }
     }
     else
     {
@@ -348,6 +357,8 @@ void orphan_fixer(uint8_t *image_buf, struct bpb33* bpb, struct node *references
     
     for (int i = 2; i < numDataClusters; i++) {
         nextCluster = get_fat_entry(i, image_buf, bpb);
+        printf("cluster num: %d; contains %d\n", i, nextCluster);
+        
         clustType = get_cluster_type(i, image_buf, bpb);
         if (nextCluster != 0) {
             //printf("nextCluster: %d, inDir:%d, type: %d\n", nextCluster, references[i]->inDir, references[i]->type);
@@ -428,13 +439,44 @@ void fat_chain_fixer(uint16_t startCluster, uint8_t *image_buf, struct bpb33* bp
     prevCluster = get_fat_entry(prevCluster, image_buf, bpb);
 }
 
-void follow_dir(uint16_t cluster, int indent,
-                uint8_t *image_buf, struct bpb33* bpb, struct node *references[])
-{
+//function that checks the size of the dirent compared to the length of the cluster chain and calls the appropriate fixer function if inconsistent
+void check_size(struct direntry* dirent, uint8_t *image_buf, struct bpb33* bpb, struct node *references[]) {
     uint32_t size = 0;
     uint16_t startCluster = 0;
     uint32_t expectedChainLength = 0;
     int chainLength = 0;
+    size = getulong(dirent->deFileSize);
+    startCluster = getushort(dirent->deStartCluster);
+    // update cluster references
+    references[startCluster]->inDir = 1;
+    references[startCluster]->type = get_cluster_type(startCluster, image_buf, bpb);
+    // check that length of cluster chain == size
+    chainLength = get_chain_length(startCluster, image_buf, bpb, references);
+    // ceiling division
+    expectedChainLength = (size % 512) ? (size / 512 + 1) : (size / 512);
+    if (expectedChainLength == 0) {
+        // directories have expected length 0 clusters, but they still use 1
+        expectedChainLength = 1;
+    }
+    if (chainLength != expectedChainLength) {
+        printf("INCONSISTENCY: expected chain length (%u clusters) does not match length of cluster chain (%d clusters)\n", expectedChainLength, chainLength);
+        if (chainLength > expectedChainLength) {
+            fat_chain_fixer(startCluster, image_buf, bpb, expectedChainLength, references);
+            printf("Inconsistency fixed.\n");
+        }
+        else {
+            dir_entry_fixer(dirent, chainLength);
+            printf("Inconsistency fixed.\n");
+        }
+    } else {
+        //printf("expected chain length (%u clusters) matches length of cluster chain (%d clusters)\n", expectedChainLength, chainLength);
+    }
+}
+
+
+void follow_dir(uint16_t cluster, int indent,
+                uint8_t *image_buf, struct bpb33* bpb, struct node *references[])
+{
     while (is_valid_cluster(cluster, bpb))
     {
         struct direntry *dirent = (struct direntry*)cluster_to_addr(cluster, image_buf, bpb);
@@ -446,29 +488,8 @@ void follow_dir(uint16_t cluster, int indent,
             // for each file in this directory
             uint16_t followclust = print_dirent(dirent, indent);
             if (is_file(dirent, indent)) {
-                // dirent is for a regular file
-                size = getulong(dirent->deFileSize);
-                startCluster = getushort(dirent->deStartCluster);
-                // update cluster references
-                references[startCluster]->inDir = 1;
-                references[startCluster]->type = get_cluster_type(startCluster, image_buf, bpb);
-                // check that length of cluster chain == size
-                chainLength = get_chain_length(startCluster, image_buf, bpb, references);
-                // ceiling division
-                expectedChainLength = (size % 512) ? (size / 512 + 1) : (size / 512);
-                if (chainLength != expectedChainLength) {
-                    printf("INCONSISTENCY: expected chain length (%u clusters) does not match length of cluster chain (%d clusters)\n", expectedChainLength, chainLength);
-                    if (chainLength > expectedChainLength) {
-                        fat_chain_fixer(startCluster, image_buf, bpb, expectedChainLength, references);
-                        printf("Inconsistency fixed.\n");
-                    }
-                    else {
-                        dir_entry_fixer(dirent, chainLength);
-                        printf("Inconsistency fixed.\n");
-                    }
-                } else {
-                    //printf("expected chain length (%u clusters) matches length of cluster chain (%d clusters)\n", expectedChainLength, chainLength);
-                }
+                // check size and fix inconsistency if necessary
+                check_size(dirent, image_buf, bpb, references);
             }
             if (followclust) {
                 // dirent is for a directory
@@ -492,6 +513,9 @@ void traverse_root(uint8_t *image_buf, struct bpb33* bpb, struct node *reference
     for ( ; i < bpb->bpbRootDirEnts; i++)
     {
         uint16_t followclust = print_dirent(dirent, 0);
+        if (is_file(dirent, 0)) {
+            check_size(dirent, image_buf, bpb, references);
+        }
         if (is_valid_cluster(followclust, bpb)) {            
             follow_dir(followclust, 1, image_buf, bpb, references);
         }
@@ -534,7 +558,7 @@ int main(int argc, char** argv) {
 
 
     unmmap_file(image_buf, &fd);
-    for (int i = 2; i < 35; i++) {
+    for (int i = 2; i < numDataClusters; i++) {
         //printf("Cluster Number: %d; inFat: %d; inDir: %d; type: %d\n", i, references[i]->inFat,references[i]->inDir, references[i]->type);
         free(references[i]);
     }
