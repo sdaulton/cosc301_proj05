@@ -81,7 +81,6 @@ void write_dirent(struct direntry *dirent, char *filename,
        cared... */
 }
 
-
 /* create_dirent finds a free slot in the directory, and write the
    directory entry -- taken from dos_cp.c*/
 
@@ -121,10 +120,53 @@ void print_indent(int indent)
         printf(" ");
 }
 
+/* ---------------------------------------------------------------------------------------------*/
+
 /*
  * Modified from dos_ls.c
  * returns the
  */
+
+
+void get_name(char *fullname, struct direntry *dirent) 
+{
+    char name[9];
+    char extension[4];
+    int i;
+
+    name[8] = ' ';
+    extension[3] = ' ';
+    memcpy(name, &(dirent->deName[0]), 8);
+    memcpy(extension, dirent->deExtension, 3);
+
+    /* names are space padded - remove the padding */
+    for (i = 8; i > 0; i--) 
+    {
+    if (name[i] == ' ') 
+        name[i] = '\0';
+    else 
+        break;
+    }
+
+    /* extensions aren't normally space padded - but remove the
+       padding anyway if it's there */
+    for (i = 3; i > 0; i--) 
+    {
+    if (extension[i] == ' ') 
+        extension[i] = '\0';
+    else 
+        break;
+    }
+    fullname[0]='\0';
+    strcat(fullname, name);
+
+    /* append the extension if it's not a directory */
+    if ((dirent->deAttributes & ATTR_DIRECTORY) == 0) 
+    {
+    strcat(fullname, ".");
+    strcat(fullname, extension);
+    }
+}
 
 uint16_t print_dirent(struct direntry *dirent, int indent)
 {
@@ -358,9 +400,74 @@ int get_chain_length(uint16_t startCluster, uint8_t *image_buf, struct bpb33* bp
     return numClusters;
 }
 
+// checks if a direntry is valid. 0 if yes, -1 if no.
+int is_valid_dir(struct direntry *dirent) {
+    int valid = 0;
+    uint32_t size = getulong(dirent->deFileSize);
+    uint16_t startCluster = getushort(dirent->deStartCluster);
+
+    // check 1: is the startcluster in a valid range?
+    if (startCluster < 2 || startCluster > (FAT12_MASK & CLUST_EOFE) || 
+                                                startCluster == ((FAT12_MASK & CLUST_BAD)) ) {
+        valid = -1;
+    }
+    // check 2: is the size valid?
+    else if (size <= 0) {
+        valid = -1;
+    }
+    return valid;
+}
+
+// given duplicate clusters n1 & n2, resolves it by checking if the duplicate
+// (the second one) is valid, and if it is then we rename it. Otherwise, we delete it.
+void duplicate_fixer(uint8_t *image_buf, struct bpb33* bpb, struct node *references[], 
+                                                                        int dup, struct direntry *dirent) 
+{
+    char newName[128];
+
+    //struct direntry *dirent1 = (struct direntry*)cluster_to_addr(dup, image_buf, bpb); // the found duplicate
+    struct direntry *dirent2 = dirent; // The current direntry.
+
+    /* Can we assume that the first copy is valid?? Is this checked somewhere else?
+    if (is_valid_dir(dirent1) == -1) {
+        dirent1->deName[0] = SLOT_DELETED;
+        printf("Corrupt duplicate found! Deleting now.\n");
+        return;
+    }
+    */
+    
+    if (is_valid_dir(dirent2) == -1) {
+        dirent2->deName[0] = SLOT_DELETED;
+        printf("Corrupt duplicate found! Deleting now.\n");
+        return;
+    }
+    
+    printf("Two valid duplicates found! Scandisk will save one as a copy.\n");
+    get_name(newName, dirent2);
+    char *p = strchr(newName, '.');
+    strcpy(p, "2\0"); // Adds "2" to mark the duplicate and gets rid of the extension
+    memcpy(dirent2->deName, newName, strlen(newName));
+}
+
+// Given a filename, checks for a duplicate of that filename and returns the clust. #
+// if it exists.
+int duplicate_finder(struct node* references[], char* filename, int numDataClusters) {
+    for (int i = 2; i < numDataClusters + 2; i++) {
+        if (strlen(filename) < 1) {
+            return 0;
+        }
+        if (strcasecmp(filename, references[i]->filename) == 0) {
+            printf("Duplicate found! There are two files named '%s'.\n", filename);
+            return i;
+        }
+    }
+    return 0;
+}
+
 // detects and fixes any orphan clusters
 void orphan_fixer(uint8_t *image_buf, struct bpb33* bpb, struct node *references[], 
-                                                                int numDataClusters) {
+                                                                int numDataClusters) 
+{
     //printf("For ref, valid clusts can go from 2-%d\n", (CLUST_LAST&FAT12_MASK));
     //printf("EOF range is from %d-%d\n", (CLUST_EOFS&FAT12_MASK), (CLUST_EOFE&FAT12_MASK));
     int numClusters = 1;
@@ -403,10 +510,17 @@ void orphan_fixer(uint8_t *image_buf, struct bpb33* bpb, struct node *references
                 i++;
             }*/
             create_dirent(dirent, name, i, numClusters * 512, image_buf, bpb);
-            printf("Name: %s, i: %d, size: %d\n", name, i, numClusters*512);
+            int dup = 0;
+            dup = duplicate_finder(references, name, numDataClusters); // check for duplicates
+            if (dup != 0) {
+                duplicate_fixer(image_buf, bpb, references, dup, dirent); // fix
+            }
+
+            //printf("Name: %s, i: %d, size: %d\n", name, i, numClusters*512);
             numClusters = 1;
-            orphanNum++;
+            //orphanNum++;
             references[i]->inDir = 1;
+
             // set type to eof
             // i.e. make the orphan cluster a standalone data file
             set_fat_entry(i, (FAT12_MASK & CLUST_EOFS), image_buf, bpb);
@@ -461,52 +575,42 @@ void fat_chain_fixer(uint16_t startCluster, uint8_t *image_buf, struct bpb33* bp
     prevCluster = get_fat_entry(prevCluster, image_buf, bpb);
 }
 
-/*
-// finds and fixes any bad clusters
-void bad_cluster_fixer(uint8_t *image_buf, struct bpb33* bpb, struct node *references[], 
-                                                                int numDataClusters) {
-    int numBad = 0;
-    uint16_t nextCluster;
-    uint16_t curCluster;
-    uint16_t prevCluster;
-    int clustType = 0;
-    int i = 1;
-
-    nextCluster = get_fat_entry(i, image_buf, bpb);
-
-    while (i < numDataClusters + 2) {
-        prevCluster = nextCluster;
-        nextCluster = get_fat_entry(i, image_buf, bpb);
-        curCluster = nextCluster;
-        clustType = get_cluster_type(i+1, image_buf, bpb);
-        nextCluster = get_fat_entry(i, image_buf, bpb);
-    
-        // Things to do: Set up groups of three so that you can verify that 
-        // the first/last are valid in case the middle isn't. As soon as you 
-        // find a bad cluster, keep progressing the last cluster and incrementing
-        // the numBad to track the size. Once you find another good one, link the
-        // good ones on either end using set_fat_entry and free the middle bad one (?).
-        // Then, update the direntry with the new and adjusted size.
-    }
-}
-*/
-
-
 //function that checks the size of the dirent compared to the length of the cluster chain and calls the appropriate fixer function if inconsistent
-void check_size(struct direntry* dirent, uint8_t *image_buf, struct bpb33* bpb, struct node *references[]) {
+void check_size(struct direntry* dirent, uint8_t *image_buf, struct bpb33* bpb, struct node *references[], int numDataClusters) {
     uint32_t size = 0;
     uint16_t startCluster = 0;
     uint32_t expectedChainLength = 0;
     int chainLength = 0;
     size = getulong(dirent->deFileSize);
     startCluster = getushort(dirent->deStartCluster);
+    int dup = 0;
+
     // update cluster references
+    char name[128];
+    get_name(name, dirent);
+
+    dup = duplicate_finder(references, name, numDataClusters); // check for duplicates
+    if (dup != 0) {
+        char name2[128];
+        get_name(name2, dirent);
+        printf("name: %s\n", name2);
+        duplicate_fixer(image_buf, bpb, references, dup, dirent); // fix dupes 
+        char name3[128];
+        get_name(name3, dirent);
+        printf("name after: %s\n", name3);
+        return; // Just stop the operation because this direntry is no longer relevant.
+    }
+
+    strcpy(references[startCluster]->filename, name);
     references[startCluster]->inDir = 1;
     references[startCluster]->type = get_cluster_type(startCluster, image_buf, bpb);
+    
+    /*
     if (references[startCluster]->type == 3) {
         // start cluster is bad
         // DO WE NEED TO DEAL WITH THIS?
     }
+    */
     // check that length of cluster chain == size
     chainLength = get_chain_length(startCluster, image_buf, bpb, references);
     // ceiling division
@@ -530,9 +634,8 @@ void check_size(struct direntry* dirent, uint8_t *image_buf, struct bpb33* bpb, 
     }
 }
 
-
 void follow_dir(uint16_t cluster, int indent,
-                uint8_t *image_buf, struct bpb33* bpb, struct node *references[])
+                uint8_t *image_buf, struct bpb33* bpb, struct node *references[], int numDataClusters)
 {
     while (is_valid_cluster(cluster, bpb))
     {
@@ -546,11 +649,11 @@ void follow_dir(uint16_t cluster, int indent,
             uint16_t followclust = print_dirent(dirent, indent);
             if (is_file(dirent, indent)) {
                 // check size and fix inconsistency if necessary
-                check_size(dirent, image_buf, bpb, references);
+                check_size(dirent, image_buf, bpb, references, numDataClusters);
             }
             if (followclust) {
                 // dirent is for a directory
-                follow_dir(followclust, indent+1, image_buf, bpb, references);
+                follow_dir(followclust, indent+1, image_buf, bpb, references, numDataClusters);
             }
             dirent++;
         }
@@ -559,8 +662,7 @@ void follow_dir(uint16_t cluster, int indent,
     }
 }
 
-
-void traverse_root(uint8_t *image_buf, struct bpb33* bpb, struct node *references[])
+void traverse_root(uint8_t *image_buf, struct bpb33* bpb, struct node *references[], int numDataClusters)
 {
     uint16_t cluster = 0;
     
@@ -571,15 +673,14 @@ void traverse_root(uint8_t *image_buf, struct bpb33* bpb, struct node *reference
     {
         uint16_t followclust = print_dirent(dirent, 0);
         if (is_file(dirent, 0)) {
-            check_size(dirent, image_buf, bpb, references);
+            check_size(dirent, image_buf, bpb, references, numDataClusters);
         }
         if (is_valid_cluster(followclust, bpb)) {            
-            follow_dir(followclust, 1, image_buf, bpb, references);
+            follow_dir(followclust, 1, image_buf, bpb, references, numDataClusters);
         }
         dirent++;
     }
 }
-
 
 int main(int argc, char** argv) {
     uint8_t *image_buf;
@@ -599,7 +700,7 @@ int main(int argc, char** argv) {
         node_init(references[i]);
     }
     // traverse directory entries to gather metadata
-    traverse_root(image_buf, bpb, references);
+    traverse_root(image_buf, bpb, references, numDataClusters);
     
     /*
     for (int i = 2; i < 35; i++) {
