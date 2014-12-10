@@ -329,12 +329,31 @@ int get_cluster_type(uint16_t clusterNum, uint8_t *image_buf, struct bpb33* bpb)
 int get_chain_length(uint16_t startCluster, uint8_t *image_buf, struct bpb33* bpb, struct node *references[]) {
     int numClusters = 1;
     uint16_t nextCluster = get_fat_entry(startCluster, image_buf, bpb);
+    uint16_t prevCluster = startCluster;
     while (!is_end_of_file(nextCluster)) {
-        references[nextCluster]->inDir = 1;
-        references[nextCluster]->type = get_cluster_type(nextCluster, image_buf, bpb);
-        nextCluster = get_fat_entry(nextCluster, image_buf, bpb);
-        numClusters++;
-        
+        if (get_cluster_type(nextCluster, image_buf, bpb) == 3) {
+            // nextCluster is bad
+            // set previous to EOF
+            // free next cluster
+            //NOTE rest of chain still exists, we will make them orphans if they are valid fat entries.
+            //      If they we find a "bad orphan" we will free it.
+            printf("Bad cluster: number: %d.  File truncated to cluster before bad cluster (now file size is %d bytes)\n", nextCluster, numClusters * 512);
+            set_fat_entry(prevCluster, (FAT12_MASK & CLUST_EOFS), image_buf, bpb);
+            references[nextCluster]->inDir = 0;
+            references[nextCluster]->type = 0;
+            set_fat_entry(nextCluster, CLUST_FREE, image_buf, bpb);
+            references[prevCluster]->type = 2;
+            return numClusters;
+        } else if (is_valid_cluster(nextCluster, bpb)) {
+            references[nextCluster]->inDir = 1;
+            references[nextCluster]->type = get_cluster_type(nextCluster, image_buf, bpb);
+            prevCluster = nextCluster;
+            nextCluster = get_fat_entry(nextCluster, image_buf, bpb);
+            numClusters++;
+        } else if (nextCluster != 0) {
+            printf("WEIRD TYPE: %d\n", get_cluster_type(prevCluster, image_buf, bpb));
+            return numClusters;
+        }
     }
     return numClusters;
 }
@@ -360,8 +379,16 @@ void orphan_fixer(uint8_t *image_buf, struct bpb33* bpb, struct node *references
         clustType = get_cluster_type(i, image_buf, bpb);
 
         if (nextCluster != (FAT12_MASK&CLUST_FREE) && references[i]->inDir == 0) {
+            //orphan
+            if (nextCluster == (FAT12_MASK & CLUST_BAD)) {
+                //bad orphan
+                //free it
+                printf("Bad Orphan #%d found! Cluster #%d.  Fat Entry set to free.\n", orphanNum, i);
+                set_fat_entry(nextCluster, CLUST_FREE, image_buf, bpb);
+                break;
+            }
             printf("Orphan #%d found! Cluster #%d.\n", orphanNum, i);
-            printf("Orphan type = %d\n", references[i]->type);
+            //printf("Orphan type = %d\n", references[i]->type);
             printf("nextCluster: %d\n", nextCluster);
             sprintf(num, "%d", orphanNum); // Converts to string so we can concat.
             strcpy(name, "found");
@@ -380,7 +407,10 @@ void orphan_fixer(uint8_t *image_buf, struct bpb33* bpb, struct node *references
             numClusters = 1;
             orphanNum++;
             references[i]->inDir = 1;
-            references[i]->type = clustType;
+            // set type to eof
+            // i.e. make the orphan cluster a standalone data file
+            set_fat_entry(i, (FAT12_MASK & CLUST_EOFS), image_buf, bpb);
+            references[i]->type = 2;
             printf("Orphan fixed!\n");
         }
     }
@@ -431,32 +461,36 @@ void fat_chain_fixer(uint16_t startCluster, uint8_t *image_buf, struct bpb33* bp
     prevCluster = get_fat_entry(prevCluster, image_buf, bpb);
 }
 
-// finds and fixes any bad FAT clusters
-void bad_fat_fixer(uint8_t *image_buf, struct bpb33* bpb, struct node *references[], 
+/*
+// finds and fixes any bad clusters
+void bad_cluster_fixer(uint8_t *image_buf, struct bpb33* bpb, struct node *references[], 
                                                                 int numDataClusters) {
-int numBad = 0;
-uint16_t nextCluster;
-uint16_t curCluster;
-uint16_t prevCluster;
-int clustType = 0;
-int i = 1;
+    int numBad = 0;
+    uint16_t nextCluster;
+    uint16_t curCluster;
+    uint16_t prevCluster;
+    int clustType = 0;
+    int i = 1;
 
-nextCluster = get_fat_entry(i, image_buf, bpb);
-
-while (i < numDataClusters + 2) {
-    prevCluster = nextCluster;
-    nextCluster = get_fat_entry(i, image_buf, bpb);
-    curCluster = nextCluster;
-    clustType = get_cluster_type(i+1, image_buf, bpb);
     nextCluster = get_fat_entry(i, image_buf, bpb);
 
-    // Things to do: Set up groups of three so that you can verify that 
-    // the first/last are valid in case the middle isn't. As soon as you 
-    // find a bad cluster, keep progressing the last cluster and incrementing
-    // the numBad to track the size. Once you find another good one, link the
-    // good ones on either end using set_fat_entry and free the middle bad one (?).
-    // Then, update the direntry with the new and adjusted size.
+    while (i < numDataClusters + 2) {
+        prevCluster = nextCluster;
+        nextCluster = get_fat_entry(i, image_buf, bpb);
+        curCluster = nextCluster;
+        clustType = get_cluster_type(i+1, image_buf, bpb);
+        nextCluster = get_fat_entry(i, image_buf, bpb);
+    
+        // Things to do: Set up groups of three so that you can verify that 
+        // the first/last are valid in case the middle isn't. As soon as you 
+        // find a bad cluster, keep progressing the last cluster and incrementing
+        // the numBad to track the size. Once you find another good one, link the
+        // good ones on either end using set_fat_entry and free the middle bad one (?).
+        // Then, update the direntry with the new and adjusted size.
+    }
 }
+*/
+
 
 //function that checks the size of the dirent compared to the length of the cluster chain and calls the appropriate fixer function if inconsistent
 void check_size(struct direntry* dirent, uint8_t *image_buf, struct bpb33* bpb, struct node *references[]) {
@@ -469,6 +503,10 @@ void check_size(struct direntry* dirent, uint8_t *image_buf, struct bpb33* bpb, 
     // update cluster references
     references[startCluster]->inDir = 1;
     references[startCluster]->type = get_cluster_type(startCluster, image_buf, bpb);
+    if (references[startCluster]->type == 3) {
+        // start cluster is bad
+        // DO WE NEED TO DEAL WITH THIS?
+    }
     // check that length of cluster chain == size
     chainLength = get_chain_length(startCluster, image_buf, bpb, references);
     // ceiling division
