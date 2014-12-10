@@ -114,8 +114,6 @@ void create_dirent(struct direntry *dirent, char *filename,
     }
 }
 
-
-
 void print_indent(int indent)
 {
     int i;
@@ -169,10 +167,10 @@ uint16_t print_dirent(struct direntry *dirent, int indent)
     }
     
     if (getushort(dirent->deStartCluster) == 4) {
-        printf("starting cluster num 4: %s\n", name);
+        //printf("starting cluster num 4: %s\n", name);
     }
     if (getushort(dirent->deStartCluster) == 3) {
-        printf("starting cluster num 3: %s\n", name);
+        //printf("starting cluster num 3: %s\n", name);
     }
     /* remove the spaces from extensions */
     for (i = 3; i > 0; i--)
@@ -341,28 +339,26 @@ int get_chain_length(uint16_t startCluster, uint8_t *image_buf, struct bpb33* bp
     return numClusters;
 }
 
+// detects and fixes any orphan clusters
 void orphan_fixer(uint8_t *image_buf, struct bpb33* bpb, struct node *references[], 
                                                                 int numDataClusters) {
-    //int is_orphan = 0; // 0 = not orphan, 1 = orphan.
-    printf("For ref, valid clusts can go from 2-%d\n", (CLUST_LAST&FAT12_MASK));
-    printf("EOF range is from %d-%d\n", (CLUST_EOFS&FAT12_MASK), (CLUST_EOFE&FAT12_MASK));
+    //printf("For ref, valid clusts can go from 2-%d\n", (CLUST_LAST&FAT12_MASK));
+    //printf("EOF range is from %d-%d\n", (CLUST_EOFS&FAT12_MASK), (CLUST_EOFE&FAT12_MASK));
     int numClusters = 1;
     char name[64];
     char num[32];
     int orphanNum = 1;
     uint16_t nextCluster;
-    struct direntry *dirent = (struct direntry*)cluster_to_addr(2, image_buf, bpb);
+    struct direntry *dirent = (struct direntry*)cluster_to_addr(0, image_buf, bpb);
     int clustType = 0;
 
     
-    for (int i = 2; i < numDataClusters; i++) {
+    for (int i = 2; i < numDataClusters + 2; i++) {
         nextCluster = get_fat_entry(i, image_buf, bpb);
-        printf("cluster num: %d; contains %d\n", i, nextCluster);
+        //printf("cluster num: %d; contains %d\n", i, nextCluster);
         
         clustType = get_cluster_type(i, image_buf, bpb);
-        if (nextCluster != 0) {
-            //printf("nextCluster: %d, inDir:%d, type: %d\n", nextCluster, references[i]->inDir, references[i]->type);
-        }
+
         if (nextCluster != (FAT12_MASK&CLUST_FREE) && references[i]->inDir == 0) {
             printf("Orphan #%d found! Cluster #%d.\n", orphanNum, i);
             printf("Orphan type = %d\n", references[i]->type);
@@ -401,7 +397,6 @@ void fat_chain_fixer(uint16_t startCluster, uint8_t *image_buf, struct bpb33* bp
     int currentNum = 1;
     uint16_t prevCluster = startCluster;
     uint16_t nextCluster = get_fat_entry(startCluster, image_buf, bpb);
-    //currentNum++; // SAM ADDED THIS
     
     // cycle through the chain until the stopping point
     while (currentNum < expectedChainLength) {
@@ -414,6 +409,7 @@ void fat_chain_fixer(uint16_t startCluster, uint8_t *image_buf, struct bpb33* bp
     //nextCluster = get_fat_entry(nextCluster, image_buf, bpb);
     while (!is_end_of_file(get_fat_entry(nextCluster, image_buf, bpb))) {
         uint16_t toFree = nextCluster;
+
         //update references
         references[nextCluster]->inDir = 0;
         references[nextCluster]->type = 0;
@@ -422,21 +418,44 @@ void fat_chain_fixer(uint16_t startCluster, uint8_t *image_buf, struct bpb33* bp
     }
 
     // frees the old EOF
-    //printf("nextCluster: %d\n", nextCluster);
     references[nextCluster]->inDir = 0;
     references[nextCluster]->type = 0;
     set_fat_entry(nextCluster, CLUST_FREE, image_buf, bpb);
-    //nextCluster = get_fat_entry(nextCluster, image_buf, bpb);
-    //printf("nextCluster: %d\n", nextCluster);
-
     
-    //printf("prevCluster: %d\n", prevCluster);
     // set the new last cluster to EOF
     set_fat_entry(prevCluster, (FAT12_MASK & CLUST_EOFS), image_buf, bpb);
+
     //update references
     references[prevCluster]->type = 2;
     references[prevCluster]->inDir = 1;
     prevCluster = get_fat_entry(prevCluster, image_buf, bpb);
+}
+
+// finds and fixes any bad FAT clusters
+void bad_fat_fixer(uint8_t *image_buf, struct bpb33* bpb, struct node *references[], 
+                                                                int numDataClusters) {
+int numBad = 0;
+uint16_t nextCluster;
+uint16_t curCluster;
+uint16_t prevCluster;
+int clustType = 0;
+int i = 1;
+
+nextCluster = get_fat_entry(i, image_buf, bpb);
+
+while (i < numDataClusters + 2) {
+    prevCluster = nextCluster;
+    nextCluster = get_fat_entry(i, image_buf, bpb);
+    curCluster = nextCluster;
+    clustType = get_cluster_type(i+1, image_buf, bpb);
+    nextCluster = get_fat_entry(i, image_buf, bpb);
+
+    // Things to do: Set up groups of three so that you can verify that 
+    // the first/last are valid in case the middle isn't. As soon as you 
+    // find a bad cluster, keep progressing the last cluster and incrementing
+    // the numBad to track the size. Once you find another good one, link the
+    // good ones on either end using set_fat_entry and free the middle bad one (?).
+    // Then, update the direntry with the new and adjusted size.
 }
 
 //function that checks the size of the dirent compared to the length of the cluster chain and calls the appropriate fixer function if inconsistent
@@ -462,11 +481,11 @@ void check_size(struct direntry* dirent, uint8_t *image_buf, struct bpb33* bpb, 
         printf("INCONSISTENCY: expected chain length (%u clusters) does not match length of cluster chain (%d clusters)\n", expectedChainLength, chainLength);
         if (chainLength > expectedChainLength) {
             fat_chain_fixer(startCluster, image_buf, bpb, expectedChainLength, references);
-            printf("Inconsistency fixed.\n");
+            printf("Inconsistency now fixed.\n");
         }
         else {
             dir_entry_fixer(dirent, chainLength);
-            printf("Inconsistency fixed.\n");
+            printf("Inconsistency now fixed.\n");
         }
     } else {
         //printf("expected chain length (%u clusters) matches length of cluster chain (%d clusters)\n", expectedChainLength, chainLength);
@@ -544,21 +563,16 @@ int main(int argc, char** argv) {
     // traverse directory entries to gather metadata
     traverse_root(image_buf, bpb, references);
     
+    /*
     for (int i = 2; i < 35; i++) {
         printf("Cluster Number: %d; inFat: %d; inDir: %d; type: %d; actual fat entry: %d\n", i, references[i]->inFat,references[i]->inDir, references[i]->type, get_fat_entry(i, image_buf, bpb));
     }
-    //NEXT STEP
-    // now traverse FAT to look for orphan blocks
-    // for each fat entry that is not empty (CHECK THIS STRAIGHT OUT OF THE FAT)
-    // but the cluster type is not set in the references data structure
-    // create a new direntry in the root directory for that orphan block (and string connected orphans together if there is a cluster chain) in the FAT
+    */
     
     orphan_fixer(image_buf, bpb, references, numDataClusters);
 
-
-
     unmmap_file(image_buf, &fd);
-    for (int i = 2; i < numDataClusters; i++) {
+    for (int i = 2; i < numDataClusters + 2; i++) {
         //printf("Cluster Number: %d; inFat: %d; inDir: %d; type: %d\n", i, references[i]->inFat,references[i]->inDir, references[i]->type);
         free(references[i]);
     }
