@@ -190,7 +190,7 @@ int get_name(char *fullname, struct direntry *dirent)
     return 0;
 }
 
-uint16_t print_dirent(struct direntry *dirent, int indent)
+uint16_t print_dirent(struct direntry *dirent, int indent, int thisDirint)
 {
     uint16_t followclust = 0;
     
@@ -257,7 +257,7 @@ uint16_t print_dirent(struct direntry *dirent, int indent)
         {
             print_indent(indent);
             dirint++;
-            printf("%s/ (directory #%d)\n", name, dirint);
+            printf("%s/ (in directory #%d)\n", name, thisDirint);
             file_cluster = getushort(dirent->deStartCluster);
             followclust = file_cluster;
         }
@@ -277,7 +277,7 @@ uint16_t print_dirent(struct direntry *dirent, int indent)
         print_indent(indent);
 
         printf("%s.%s (%u bytes) (starting cluster %d) (in directory %d) %c%c%c%c\n",
-               name, extension, size, getushort(dirent->deStartCluster), dirint,
+               name, extension, size, getushort(dirent->deStartCluster), thisDirint,
                ro?'r':' ',
                hidden?'h':' ',
                sys?'s':' ',
@@ -437,7 +437,7 @@ int get_chain_length(uint16_t startCluster, uint8_t *image_buf, struct bpb33* bp
             references[prevCluster]->type = 0;
             set_fat_entry(prevCluster, CLUST_FREE, image_buf, bpb);
             references[beforePrevCluster]->type = 2;
-            return numClusters;
+            return numClusters-1;
         } else if (nextCluster == 0) {
             //Empty
             references[prevCluster]->inDir = 1;
@@ -492,7 +492,7 @@ int duplicate_fixer(uint8_t *image_buf, struct bpb33* bpb, struct node *referenc
 // Given a filename, checks for a duplicate of that filename and returns the clust. #
 // if it exists.
 int duplicate_finder(struct node* references[], char* filename, int numDataClusters, int n) {
-    for (int i = 2; i < numDataClusters + 2; i++) {
+    for (int i = 2; i < numDataClusters; i++) {
         if (strlen(filename) < 1) {
             return 0;
         }
@@ -500,7 +500,7 @@ int duplicate_finder(struct node* references[], char* filename, int numDataClust
             continue;
         }
         if (strcasecmp(filename, references[i]->filename) == 0) {
-            if (references[i]->dirint != references[n]->dirint) {
+            if ((references[i]->dirint != references[n]->dirint) ||(references[i]->dirint == -1)||(references[n]->dirint == -1)) {
                 // The two files are named the same but are in different directories.
                 return 0;
             }
@@ -523,8 +523,7 @@ void orphan_fixer(uint8_t *image_buf, struct bpb33* bpb, struct node *references
     struct direntry *dirent = (struct direntry*)cluster_to_addr(0, image_buf, bpb);
     int clustType = 0;
 
-    
-    for (int i = 2; i < numDataClusters + 2; i++) {
+    for (int i = 2; i < numDataClusters; i++) {
         nextCluster = get_fat_entry(i, image_buf, bpb);        
         clustType = get_cluster_type(i, image_buf, bpb);
 
@@ -535,7 +534,7 @@ void orphan_fixer(uint8_t *image_buf, struct bpb33* bpb, struct node *references
                 //free it
                 printf("Bad Orphan found! Cluster #%d. Fat Entry set to free.\n", i);
                 set_fat_entry(nextCluster, CLUST_FREE, image_buf, bpb);
-                break;
+                continue;
             }
             printf("Orphan #%d found! Cluster #%d.\n", orphanNum, i);
             sprintf(num, "%d", orphanNum); // Converts to string so we can concat.
@@ -553,7 +552,7 @@ void orphan_fixer(uint8_t *image_buf, struct bpb33* bpb, struct node *references
             numClusters = 1;
             orphanNum++;
             references[i]->inDir = 1;
-            references[i]->dirint = dirint;
+            //references[i]->dirint = 0;
 
             // set type to eof
             // i.e. make the orphan cluster a standalone data file
@@ -612,7 +611,7 @@ void fat_chain_fixer(uint16_t startCluster, uint8_t *image_buf, struct bpb33* bp
 }
 
 //function that checks the size of the dirent compared to the length of the cluster chain and calls the appropriate fixer function if inconsistent
-void check_size(struct direntry* dirent, uint8_t *image_buf, struct bpb33* bpb, struct node *references[], int numDataClusters) {
+void check_size(struct direntry* dirent, uint8_t *image_buf, struct bpb33* bpb, struct node *references[], int numDataClusters, int thisDirint) {
     uint32_t size = 0;
     uint16_t startCluster = 0;
     uint32_t expectedChainLength = 0;
@@ -649,7 +648,7 @@ void check_size(struct direntry* dirent, uint8_t *image_buf, struct bpb33* bpb, 
         return;
     } else {
         references[startCluster]->inDir = 1;
-        references[startCluster]->dirint = dirint;
+        references[startCluster]->dirint = thisDirint;
         references[startCluster]->type = get_cluster_type(startCluster, image_buf, bpb);
     }
 
@@ -678,6 +677,7 @@ void check_size(struct direntry* dirent, uint8_t *image_buf, struct bpb33* bpb, 
 void follow_dir(uint16_t cluster, int indent,
     uint8_t *image_buf, struct bpb33* bpb, struct node *references[], int numDataClusters)
 {
+	int thisDirint = dirint; // the directory number for this directory
     while (is_valid_cluster_correct(cluster, bpb))
     {
         struct direntry *dirent = (struct direntry*)cluster_to_addr(cluster, image_buf, bpb);
@@ -687,10 +687,10 @@ void follow_dir(uint16_t cluster, int indent,
         for ( ; i < numDirEntries; i++)
         {
             // for each file in this directory
-            uint16_t followclust = print_dirent(dirent, indent);
+            uint16_t followclust = print_dirent(dirent, indent, thisDirint);
             if (is_file(dirent, indent)) {
                 // check size and fix inconsistency if necessary
-                check_size(dirent, image_buf, bpb, references, numDataClusters);
+                check_size(dirent, image_buf, bpb, references, numDataClusters, thisDirint);
             }
             if (followclust) {
                 // dirent is for a directory
@@ -711,9 +711,9 @@ void traverse_root(uint8_t *image_buf, struct bpb33* bpb, struct node *reference
     int i = 0;
     for ( ; i < bpb->bpbRootDirEnts; i++)
     {
-        uint16_t followclust = print_dirent(dirent, 0);
+        uint16_t followclust = print_dirent(dirent, 0, 0);
         if (is_file(dirent, 0)) {
-            check_size(dirent, image_buf, bpb, references, numDataClusters);
+            check_size(dirent, image_buf, bpb, references, numDataClusters, 0);
         }
         if (is_valid_cluster_correct(followclust, bpb)) {            
             follow_dir(followclust, 1, image_buf, bpb, references, numDataClusters);
@@ -735,8 +735,8 @@ int main(int argc, char** argv) {
     int numDataClusters = bpb->bpbSectors - 1 - 9 - 9 - 14;
 
     // initialize data structure to store information about each cluster
-    struct node *references[numDataClusters + 2]; // only + 2 to create idempotent mapping from cluster number to index
-    for (int i = 2; i < numDataClusters + 2; i ++) {
+    struct node *references[numDataClusters]; // only + 2 to create idempotent mapping from cluster number to index
+    for (int i = 2; i < numDataClusters; i ++) {
         references[i] = malloc(sizeof(struct node));
         node_init(references[i]);
     }
@@ -748,7 +748,7 @@ int main(int argc, char** argv) {
     orphan_fixer(image_buf, bpb, references, numDataClusters);
 
     unmmap_file(image_buf, &fd);
-    for (int i = 2; i < numDataClusters + 2; i++) {        
+    for (int i = 2; i < numDataClusters; i++) {        
         free(references[i]);
     }
 
