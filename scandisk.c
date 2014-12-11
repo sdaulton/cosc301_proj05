@@ -15,6 +15,8 @@
 #include "dos.h"
 #include "refc.c"
 
+static int dirint = 0;
+
 void usage(char *progname) {
     fprintf(stderr, "usage: %s <imagename>\n", progname);
     exit(1);
@@ -86,9 +88,6 @@ void write_dirent(struct direntry *dirent, char *filename,
     dirent->deAttributes = ATTR_NORMAL;
     putushort(dirent->deStartCluster, start_cluster);
     putulong(dirent->deFileSize, size);
-
-    /* could also set time and date here if we really
-       cared... */
 }
 
 /* create_dirent finds a free slot in the directory, and write the
@@ -257,7 +256,8 @@ uint16_t print_dirent(struct direntry *dirent, int indent)
         if ((dirent->deAttributes & ATTR_HIDDEN) != ATTR_HIDDEN)
         {
             print_indent(indent);
-            printf("%s/ (directory)\n", name);
+            dirint++;
+            printf("%s/ (directory #%d)\n", name, dirint);
             file_cluster = getushort(dirent->deStartCluster);
             followclust = file_cluster;
         }
@@ -275,8 +275,9 @@ uint16_t print_dirent(struct direntry *dirent, int indent)
         
         size = getulong(dirent->deFileSize);
         print_indent(indent);
-        printf("%s.%s (%u bytes) (starting cluster %d) %c%c%c%c\n",
-               name, extension, size, getushort(dirent->deStartCluster),
+
+        printf("%s.%s (%u bytes) (starting cluster %d) (in directory %d) %c%c%c%c\n",
+               name, extension, size, getushort(dirent->deStartCluster), dirint,
                ro?'r':' ',
                hidden?'h':' ',
                sys?'s':' ',
@@ -337,8 +338,6 @@ uint16_t is_file(struct direntry *dirent, int indent)
     if ((dirent->deAttributes & ATTR_WIN95LFN) == ATTR_WIN95LFN)
     {
         // ignore any long file name extension entries
-        //
-        // printf("Win95 long-filename entry seq 0x%0x\n", dirent->deName[0]);
     }
     else if ((dirent->deAttributes & ATTR_VOLUME) != 0)
     {
@@ -387,7 +386,7 @@ int get_cluster_type(uint16_t clusterNum, uint8_t *image_buf, struct bpb33* bpb)
 //fix the cluster already used in a cluster chain (either this file or another file) -->truncate this file to end at the cluster preceding the already used cluster
 void fixUsedCluster(uint16_t prevCluster, uint16_t nextCluster, uint8_t *image_buf, struct bpb33* bpb, struct node *references[], struct direntry *dirent) {
     char name[9];
-    //already in the cluster chain of another dirent
+    // already in the cluster chain of another dirent
     // set prevCluster in chain as EOF
     name[8] = ' ';
     memcpy(name, &(dirent->deName[0]), 8);
@@ -407,44 +406,6 @@ void fixUsedCluster(uint16_t prevCluster, uint16_t nextCluster, uint8_t *image_b
 
 // Takes the start cluster number as a parameter and returns the length of the cluster chain (i.e. number of clusters in file)
 int get_chain_length(uint16_t startCluster, uint8_t *image_buf, struct bpb33* bpb, struct node *references[], struct direntry *dirent) {
-    /*
-    int numClusters = 1;
-    uint16_t nextCluster = get_fat_entry(startCluster, image_buf, bpb);
-    uint16_t prevCluster = startCluster;
-    
-    while (!is_end_of_file(nextCluster)) {
-
-        if (get_cluster_type(nextCluster, image_buf, bpb) == 3) {
-            // nextCluster is bad
-            // set previous to EOF
-            // free next cluster
-            //NOTE rest of chain still exists, we will make them orphans if they are valid fat entries.
-            //      If they we find a "bad orphan" we will free it.
-            printf("Bad cluster: number: %d.  File truncated to cluster before bad cluster (now file size is %d bytes)\n", nextCluster, numClusters * 512);
-            set_fat_entry(prevCluster, (FAT12_MASK & CLUST_EOFS), image_buf, bpb);
-            references[nextCluster]->inDir = 0;
-            references[nextCluster]->type = 0;
-            set_fat_entry(nextCluster, CLUST_FREE, image_buf, bpb);
-            references[prevCluster]->type = 2;
-            return numClusters;
-        } else if (is_valid_cluster_correct(nextCluster, bpb)) {
-            if (references[nextCluster]->inDir) {
-                fixUsedCluster(prevCluster, nextCluster, image_buf, bpb, references, dirent);
-                return numClusters;
-            }
-            
-            references[nextCluster]->inDir = 1;
-            references[nextCluster]->count = 1;
-            references[nextCluster]->type = get_cluster_type(nextCluster, image_buf, bpb);
-            prevCluster = nextCluster;
-            nextCluster = get_fat_entry(nextCluster, image_buf, bpb);
-            numClusters++;
-        } else if (nextCluster != 0) {
-            //Reserved
-            //printf("Reserved: %d\n", get_cluster_type(prevCluster, image_buf, bpb));
-            return numClusters;
-        }
-    }*/
     int numClusters = 1;
     uint16_t nextCluster = get_fat_entry(startCluster, image_buf, bpb);
     uint16_t prevCluster = startCluster;
@@ -468,8 +429,8 @@ int get_chain_length(uint16_t startCluster, uint8_t *image_buf, struct bpb33* bp
             // nextCluster is bad
             // set previous to EOF
             // free next cluster
-            //NOTE rest of chain still exists, we will make them orphans if they are valid fat entries.
-            //      If they we find a "bad orphan" we will free it.
+            // NOTE rest of chain still exists, we will make them orphans if they are valid fat entries.
+            // If they we find a "bad orphan" we will free it.
             printf("Bad cluster: number: %d.  File truncated to cluster before bad cluster (now file size is %d bytes)\n", prevCluster, numClusters * 512);
             set_fat_entry(beforePrevCluster, (FAT12_MASK & CLUST_EOFS), image_buf, bpb);
             references[prevCluster]->inDir = 0;
@@ -482,7 +443,6 @@ int get_chain_length(uint16_t startCluster, uint8_t *image_buf, struct bpb33* bp
             references[prevCluster]->inDir = 1;
             references[prevCluster]->type = 2;
             set_fat_entry(prevCluster, (FAT12_MASK & CLUST_EOFS), image_buf, bpb);
-            //printf("Reserved: %d\n", get_cluster_type(prevCluster, image_buf, bpb));
             return numClusters+1;
         }
 
@@ -514,40 +474,36 @@ int duplicate_fixer(uint8_t *image_buf, struct bpb33* bpb, struct node *referenc
                                                                         int dup, struct direntry *dirent) 
 {
     char newName[128];
-
-    //struct direntry *dirent1 = (struct direntry*)cluster_to_addr(dup, image_buf, bpb); // the found duplicate
-    struct direntry *dirent2 = dirent; // The current direntry.
-
-    /* Can we assume that the first copy is valid?? Is this checked somewhere else?
-    if (is_valid_dir(dirent1) == -1) {
-        dirent1->deName[0] = SLOT_DELETED;
-        printf("Corrupt duplicate found! Deleting now.\n");
-        return;
-    }
-    */
     
-    if (is_valid_dir(dirent2) == -1) {
-        dirent2->deName[0] = SLOT_DELETED;
+    if (is_valid_dir(dirent) == -1) {
+        dirent->deName[0] = SLOT_DELETED;
         printf("Duplicate is corrupt! Deleting now.\n");
         return 1;
     }
     
     printf("Two valid duplicates found! Scandisk will save one as a copy.\n");
-    get_name(newName, dirent2);
+    get_name(newName, dirent);
     char *p = strchr(newName, '.');
     strcpy(p, "2\0"); // Adds "2" to mark the duplicate and gets rid of the extension
-    memcpy(dirent2->deName, newName, strlen(newName));
+    memcpy(dirent->deName, newName, strlen(newName));
     return 0;
 }
 
 // Given a filename, checks for a duplicate of that filename and returns the clust. #
 // if it exists.
-int duplicate_finder(struct node* references[], char* filename, int numDataClusters) {
+int duplicate_finder(struct node* references[], char* filename, int numDataClusters, int n) {
     for (int i = 2; i < numDataClusters + 2; i++) {
         if (strlen(filename) < 1) {
             return 0;
         }
+        else if (strlen(references[i]->filename) < 1) {
+            continue;
+        }
         if (strcasecmp(filename, references[i]->filename) == 0) {
+            if (references[i]->dirint != references[n]->dirint) {
+                // The two files are named the same but are in different directories.
+                return 0;
+            }
             printf("Duplicate found! There are two files named '%s'.\n", filename);
             return i;
         }
@@ -557,10 +513,8 @@ int duplicate_finder(struct node* references[], char* filename, int numDataClust
 
 // detects and fixes any orphan clusters
 void orphan_fixer(uint8_t *image_buf, struct bpb33* bpb, struct node *references[], 
-                                                                int numDataClusters) 
+                                                int numDataClusters) 
 {
-    //printf("For ref, valid clusts can go from 2-%d\n", (CLUST_LAST&FAT12_MASK));
-    //printf("EOF range is from %d-%d\n", (CLUST_EOFS&FAT12_MASK), (CLUST_EOFE&FAT12_MASK));
     int numClusters = 1;
     char name[64];
     char num[32];
@@ -571,9 +525,7 @@ void orphan_fixer(uint8_t *image_buf, struct bpb33* bpb, struct node *references
 
     
     for (int i = 2; i < numDataClusters + 2; i++) {
-        nextCluster = get_fat_entry(i, image_buf, bpb);
-        //printf("cluster num: %d; contains %d\n", i, nextCluster);
-        
+        nextCluster = get_fat_entry(i, image_buf, bpb);        
         clustType = get_cluster_type(i, image_buf, bpb);
 
         if (nextCluster != (FAT12_MASK&CLUST_FREE) && references[i]->inDir == 0) {
@@ -581,36 +533,27 @@ void orphan_fixer(uint8_t *image_buf, struct bpb33* bpb, struct node *references
             if (nextCluster == (FAT12_MASK & CLUST_BAD)) {
                 //bad orphan
                 //free it
-                printf("Bad Orphan found! Cluster #%d.  Fat Entry set to free.\n", i);
+                printf("Bad Orphan found! Cluster #%d. Fat Entry set to free.\n", i);
                 set_fat_entry(nextCluster, CLUST_FREE, image_buf, bpb);
                 break;
             }
             printf("Orphan #%d found! Cluster #%d.\n", orphanNum, i);
-            //printf("Orphan type = %d\n", references[i]->type);
-            printf("nextCluster: %d\n", nextCluster);
             sprintf(num, "%d", orphanNum); // Converts to string so we can concat.
             strcpy(name, "found");
             strcat(name, num);
             strcat(name, ".dat");
-            /*while (!is_end_of_file(nextCluster)) {
-                printf("Longer than two.\n");
-                nextCluster = get_fat_entry(i, image_buf, bpb);
-                references[i]-> inDir = 1;
-                printf("Part of orphan: %d\n", i);
-                numClusters++;
-                i++;
-            }*/
+
             create_dirent(dirent, name, i, numClusters * 512, image_buf, bpb);
             int dup = 0;
-            dup = duplicate_finder(references, name, numDataClusters); // check for duplicates
+            dup = duplicate_finder(references, name, numDataClusters, i); // check for duplicates
             if (dup != 0) {
                 duplicate_fixer(image_buf, bpb, references, dup, dirent); // fix
             }
 
-            printf("Name: %s, i: %d, size: %d\n", name, i, numClusters*512);
             numClusters = 1;
             orphanNum++;
             references[i]->inDir = 1;
+            references[i]->dirint = dirint;
 
             // set type to eof
             // i.e. make the orphan cluster a standalone data file
@@ -629,27 +572,22 @@ void dir_entry_fixer(struct direntry *dirent, int chainLength) {
 
 // fixes the situation where a FAT chain is longer than the correct file size
 void fat_chain_fixer(uint16_t startCluster, uint8_t *image_buf, struct bpb33* bpb, uint32_t expectedChainLength, struct node *references[]) {
-    printf("Start Cluster: %d\n", startCluster);
     int currentNum = 1;
     uint16_t prevCluster = startCluster;
     uint16_t nextCluster = get_fat_entry(startCluster, image_buf, bpb);
-    //nextCluster = startCluster;
-    printf("Next Cluster: %d\n", nextCluster);
     
     // cycle through the chain until the stopping point
     while (currentNum < expectedChainLength) {
         prevCluster = nextCluster;
         nextCluster = get_fat_entry(nextCluster, image_buf, bpb);
-        printf("Next Cluster: %d\n", nextCluster);
         currentNum++;
     }
     
     // free any clusters past the correct size
-    //nextCluster = get_fat_entry(nextCluster, image_buf, bpb);
     if (is_valid_cluster_correct(nextCluster,bpb)) {
     	while (!is_end_of_file(get_fat_entry(nextCluster, image_buf, bpb))) {
-    		printf("Next Cluster: %d\n", nextCluster);
-        	uint16_t toFree = nextCluster;
+        	
+            uint16_t toFree = nextCluster;
 
         	//update references
         	references[nextCluster]->inDir = 0;
@@ -681,8 +619,7 @@ void check_size(struct direntry* dirent, uint8_t *image_buf, struct bpb33* bpb, 
     int chainLength = 0;
     size = getulong(dirent->deFileSize);
     startCluster = getushort(dirent->deStartCluster);
-    int dup = 0;
-	
+    int dup = 0;	
     
     // update cluster references
     char name[128];
@@ -693,40 +630,29 @@ void check_size(struct direntry* dirent, uint8_t *image_buf, struct bpb33* bpb, 
     //check if start cluster is valid
 	if (!is_valid_cluster_correct(startCluster, bpb)) {
         // start cluster num is not valid
-         printf("Start Cluster Number %d is not valid.  So file %s was deleted", startCluster, name);
+         printf("Start Cluster Number %d is not valid.  So file %s was deleted\n", startCluster, name);
         dirent->deName[0] = SLOT_DELETED;
         return;
     }
 
-    dup = duplicate_finder(references, name, numDataClusters); // check for duplicates
+    dup = duplicate_finder(references, name, numDataClusters, startCluster); // check for duplicates & fix
     if (dup != 0) {
-        char name2[128];
-        get_name(name2, dirent);
-        printf("name: %s\n", name2);
-        if(duplicate_fixer(image_buf, bpb, references, dup, dirent) == 0) { // fix dupes 
-            char name3[128];
-            get_name(name3, dirent);
-            printf("name after: %s\n", name3);
-        }
+        duplicate_fixer(image_buf, bpb, references, dup, dirent);
         return; // Just stop the operation because this direntry is no longer relevant.
     }
 
     strcpy(references[startCluster]->filename, name);
+
     if (references[startCluster]->inDir) {
         printf("Start Cluster Number %d is already part of cluster chain.  So file %s was deleted\n", startCluster, name);
         dirent->deName[0] = SLOT_DELETED;
         return;
     } else {
         references[startCluster]->inDir = 1;
+        references[startCluster]->dirint = dirint;
         references[startCluster]->type = get_cluster_type(startCluster, image_buf, bpb);
     }
-    /*
-    if (!is_valid_cluster_correct(startCluster, bpb)) {
-        // value contained in start cluster's fat entry is bad
-         printf("Start Cluster Number %d is not valid.  So file %s was deleted\n", startCluster, name);
-        dirent->deName[0] = SLOT_DELETED;
-        return;
-    */
+
     // check that length of cluster chain == size
     // this also checks if any clusters in this dirent's cluster chain are already part of a cluster chain.
     chainLength = get_chain_length(startCluster, image_buf, bpb, references, dirent);
@@ -746,13 +672,11 @@ void check_size(struct direntry* dirent, uint8_t *image_buf, struct bpb33* bpb, 
             dir_entry_fixer(dirent, chainLength);
             printf("Inconsistency now fixed.\n");
         }
-    } else {
-        //printf("expected chain length (%u clusters) matches length of cluster chain (%d clusters)\n", expectedChainLength, chainLength);
     }
 }
 
 void follow_dir(uint16_t cluster, int indent,
-                uint8_t *image_buf, struct bpb33* bpb, struct node *references[], int numDataClusters)
+    uint8_t *image_buf, struct bpb33* bpb, struct node *references[], int numDataClusters)
 {
     while (is_valid_cluster_correct(cluster, bpb))
     {
@@ -782,7 +706,6 @@ void follow_dir(uint16_t cluster, int indent,
 void traverse_root(uint8_t *image_buf, struct bpb33* bpb, struct node *references[], int numDataClusters)
 {
     uint16_t cluster = 0;
-    
     struct direntry *dirent = (struct direntry*)cluster_to_addr(cluster, image_buf, bpb);
     
     int i = 0;
@@ -817,23 +740,18 @@ int main(int argc, char** argv) {
         references[i] = malloc(sizeof(struct node));
         node_init(references[i]);
     }
+
     // traverse directory entries to gather metadata
     traverse_root(image_buf, bpb, references, numDataClusters);
     
-    /*
-    for (int i = 2; i < 35; i++) {
-        printf("Cluster Number: %d; inFat: %d; inDir: %d; type: %d; actual fat entry: %d\n", i, references[i]->inFat,references[i]->inDir, references[i]->type, get_fat_entry(i, image_buf, bpb));
-    }
-    */
-    
+    // find and fix orphans    
     orphan_fixer(image_buf, bpb, references, numDataClusters);
 
     unmmap_file(image_buf, &fd);
-    for (int i = 2; i < numDataClusters + 2; i++) {
-        //printf("Cluster Number: %d; inFat: %d; inDir: %d; type: %d\n", i, references[i]->inFat,references[i]->inDir, references[i]->type);
-        
+    for (int i = 2; i < numDataClusters + 2; i++) {        
         free(references[i]);
     }
-    // remember to FREE references
+
+    free(bpb);
     return 0;
 }
