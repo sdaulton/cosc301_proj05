@@ -1,6 +1,6 @@
 #ifndef __REFC_H__
 #define __REFC_H__
-
+//written by Bria Vicenti
 struct node {
 	int inDir;
     int type; // 0 -> empty; 1-> normal part of cluster chain; 2-> eof; 3-> bad; 4 -> reserved; -1 -> not set
