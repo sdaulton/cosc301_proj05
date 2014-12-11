@@ -94,7 +94,6 @@ void write_dirent(struct direntry *dirent, char *filename,
 
 /* create_dirent finds a free slot in the directory, and write the
    directory entry -- taken from dos_cp.c*/
-
 void create_dirent(struct direntry *dirent, char *filename, 
            uint16_t start_cluster, uint32_t size,
            uint8_t *image_buf, struct bpb33* bpb)
@@ -123,7 +122,8 @@ void create_dirent(struct direntry *dirent, char *filename,
     dirent++;
     }
 }
-// from dos_ls.c
+
+// Taken from dos_ls.c
 void print_indent(int indent)
 {
     int i;
@@ -131,14 +131,7 @@ void print_indent(int indent)
         printf(" ");
 }
 
-/* ---------------------------------------------------------------------------------------------*/
-
-/*
- * Modified from dos_ls.c by Bria Vicenti
- * returns the
- */
-
-
+// From dos_ls.c
 int get_name(char *fullname, struct direntry *dirent) 
 {
     char name[9];
@@ -193,7 +186,7 @@ int get_name(char *fullname, struct direntry *dirent)
 }
 
 
-// modified by Sam Daulton from dos_ls.c
+// modified by Sam Daulton & Bria Vicenti from dos_ls.c
 uint16_t print_dirent(struct direntry *dirent, int indent, int thisDirint)
 {
     uint16_t followclust = 0;
@@ -456,7 +449,8 @@ int get_chain_length(uint16_t startCluster, uint8_t *image_buf, struct bpb33* bp
 
     return numClusters;
 }
-// Wrriten By Bria Vicenti
+
+// Writen By Bria Vicenti
 // checks if a direntry is valid. 0 if yes, -1 if no.
 int is_valid_dir(struct direntry *dirent) {
     int valid = 0;
@@ -474,9 +468,9 @@ int is_valid_dir(struct direntry *dirent) {
     }
     return valid;
 }
-//Written By Bria Vicenti
-// given duplicate clusters n1 & n2, resolves it by checking if the duplicate
-// (the second one) is valid, and if it is then we rename it. Otherwise, we delete it.
+
+// Written By Bria Vicenti
+// given duplicate clusters n1 & n2, resolves it. 
 // returns 0 if not deleted, return 1 if direntry deleted
 int duplicate_fixer(uint8_t *image_buf, struct bpb33* bpb, struct node *references[], 
                                                                         int dup, struct direntry *dirent) 
@@ -496,7 +490,8 @@ int duplicate_fixer(uint8_t *image_buf, struct bpb33* bpb, struct node *referenc
     memcpy(dirent->deName, newName, strlen(newName));
     return 0;
 }
-//Written by Bria Vicenti
+
+// Written by Bria Vicenti
 // Given a filename, checks for a duplicate of that filename and returns the clust. #
 // if it exists.
 int duplicate_finder(struct node* references[], char* filename, int numDataClusters, int n) {
@@ -518,7 +513,8 @@ int duplicate_finder(struct node* references[], char* filename, int numDataClust
     }
     return 0;
 }
-//Written by Bria Vicenti
+
+// Written by Bria Vicenti
 // detects and fixes any orphan clusters
 void orphan_fixer(uint8_t *image_buf, struct bpb33* bpb, struct node *references[], 
                                                 int numDataClusters) 
@@ -570,14 +566,15 @@ void orphan_fixer(uint8_t *image_buf, struct bpb33* bpb, struct node *references
         }
     }
 }
-// written by Bria Vicenti
+
+// Written by Bria Vicenti
 // fixes the situation where a FAT chain is shorter than the expected filesize
 void dir_entry_fixer(struct direntry *dirent, int chainLength) {
     uint32_t size = chainLength * 512;
     putulong(dirent->deFileSize, size);
 }
 
-//written by Bria Vicenti,
+// Written by Bria Vicenti,
 // fixes the situation where a FAT chain is longer than the correct file size
 void fat_chain_fixer(uint16_t startCluster, uint8_t *image_buf, struct bpb33* bpb, uint32_t expectedChainLength, struct node *references[]) {
     int currentNum = 1;
@@ -619,7 +616,7 @@ void fat_chain_fixer(uint16_t startCluster, uint8_t *image_buf, struct bpb33* bp
     prevCluster = get_fat_entry(prevCluster, image_buf, bpb);
 }
 
-//Written by Sam Daulton
+// Written by Sam Daulton
 //function that checks the size of the dirent compared to the length of the cluster chain and calls the appropriate fixer function if inconsistent
 void check_size(struct direntry* dirent, uint8_t *image_buf, struct bpb33* bpb, struct node *references[], int numDataClusters, int thisDirint) {
     uint32_t size = 0;
@@ -683,6 +680,7 @@ void check_size(struct direntry* dirent, uint8_t *image_buf, struct bpb33* bpb, 
         }
     }
 }
+
 // from dos_ls.c, modified by Sam Daulton
 void follow_dir(uint16_t cluster, int indent,
     uint8_t *image_buf, struct bpb33* bpb, struct node *references[], int numDataClusters)
@@ -732,6 +730,7 @@ void traverse_root(uint8_t *image_buf, struct bpb33* bpb, struct node *reference
         dirent++;
     }
 }
+
 // Written by Sam Daulton and Bria Vicenti
 int main(int argc, char** argv) {
     uint8_t *image_buf;
