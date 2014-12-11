@@ -231,7 +231,6 @@ void set_fat_entry(uint16_t clusternum, uint16_t value,
 int is_valid_cluster(uint16_t cluster, struct bpb33 *bpb)
 {
     uint16_t max_cluster = (bpb->bpbSectors / bpb->bpbSecPerClust) & FAT12_MASK;
-
     if (cluster >= (FAT12_MASK & CLUST_FIRST) && 
         cluster <= (FAT12_MASK & CLUST_LAST) &&
         cluster < max_cluster)
